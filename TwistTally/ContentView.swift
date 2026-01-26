@@ -349,8 +349,23 @@ private struct ManagePopover: View {
             document: JSONBackupDocument(data: backupData),
             contentType: .json,
             defaultFilename: ExportUtil.safeFileComponent("TwistTally_Contests_Backup") + "_" + ExportUtil.timestamp()
-        ) { _ in
-            // (No-op) The system handles success/cancel here.
+        ) { result in
+            switch result {
+            case .success:
+                // NOTE: This fires after the user picks a location/name in Files.
+                store.showBanner("Backup exported.")
+                successMessage = "Backup exported successfully."
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                showSuccessAlert = true
+
+            case .failure(let error):
+                // If the user cancels, SwiftUI often reports a failure (e.g., CocoaError.userCancelled).
+                // We keep this lightweight and only show a message.
+                store.showBanner("Export canceled or failed.")
+                successMessage = "Export canceled or failed: \(error.localizedDescription)"
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                showSuccessAlert = true
+            }
         }
         // ✅ Import backup from Files (REPLACES all contests)
         .fileImporter(
@@ -1236,7 +1251,8 @@ private struct ResultsPDFView: View {
             }
             .padding(.top, 12)
         }
-        .padding(20)
+        .padding(.vertical, 20)
+        .padding(.horizontal, 36)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
