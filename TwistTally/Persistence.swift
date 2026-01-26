@@ -136,7 +136,7 @@ actor PersistenceStore {
         // Simple schema guard. If you add migrations later, handle them here.
         // For now, accept any version >= 1.
         if state.schemaVersion < 1 {
-            throw NSError(domain: "TwistTally.Persistence", code: 2, userInfo: [
+            throw NSError(domain: "TswistTally.Persistence", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Unsupported schema version \(state.schemaVersion)"
             ])
         }

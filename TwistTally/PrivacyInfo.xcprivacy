@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- TwistTally does not track users -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <!-- TwistTally does not collect data for transmission off-device -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <!-- If you do not use tracking domains, keep empty -->
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <!-- Required Reason APIs:
+         Add entries ONLY if Xcode/Apple submission warnings say you accessed one.
+         Start empty to keep this accurate; update if App Store Connect flags something. -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array/>
+</dict>
+</plist>

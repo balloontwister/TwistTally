@@ -21,10 +21,6 @@ struct ResultsView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // Share-sheet state
-    @State private var shareItems: [Any] = []
-    @State private var isShowingShareSheet = false
-
     // User feedback (shown AFTER the share sheet closes)
     @State private var statusMessage: String? = nil
 
@@ -35,7 +31,7 @@ struct ResultsView: View {
         NavigationStack {
             VStack(spacing: 12) {
 
-                // Buttons ABOVE the title (as requested)
+                // Buttons ABOVE the title
                 exportButtons
 
                 Text("Contest Results")
@@ -62,21 +58,6 @@ struct ResultsView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: statusMessage)
-            .sheet(isPresented: $isShowingShareSheet) {
-                ResultsShareSheet(
-                    activityItems: shareItems,
-                    onComplete: { completed, error in
-                        // Called when the user dismisses the share sheet.
-                        if let error {
-                            showStatus("Couldn’t share: \(error.localizedDescription)")
-                        } else if completed {
-                            showStatus("Shared ✅")
-                        } else {
-                            showStatus("Share canceled")
-                        }
-                    }
-                )
-            }
         }
     }
 
@@ -129,6 +110,38 @@ struct ResultsView: View {
 
     // MARK: - Export actions
 
+    @MainActor
+    private func presentShare(for url: URL) {
+        // Defensive: ensure file exists and is non-empty before presenting.
+        let maxAttempts = 30
+        var isReady = false
+        for _ in 0..<maxAttempts {
+            if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue,
+               size > 0 {
+                isReady = true
+                break
+            }
+            // Small delay (20ms) to allow the write to flush.
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+
+        guard isReady else {
+            showStatus("Couldn’t prepare share sheet")
+            return
+        }
+
+        ShareUtil.present(url: url) { completed, error in
+            // Called when the user dismisses the share sheet.
+            if let error {
+                showStatus("Couldn’t share: \(error.localizedDescription)")
+            } else if completed {
+                showStatus("Shared ✅")
+            } else {
+                showStatus("Share canceled")
+            }
+        }
+    }
+
     private func exportCSV() {
         lastExportTimestamp = ExportUtil.timestamp()
 
@@ -143,9 +156,7 @@ struct ResultsView: View {
             return
         }
 
-        // Present share sheet immediately with the new URL
-        shareItems = [url]
-        isShowingShareSheet = true
+        presentShare(for: url)
     }
 
     private func exportPDF() {
@@ -167,8 +178,7 @@ struct ResultsView: View {
             return
         }
 
-        shareItems = [url]
-        isShowingShareSheet = true
+        presentShare(for: url)
     }
 
     private func showStatus(_ message: String) {
@@ -282,7 +292,6 @@ private struct ResultsPDFView: View {
 
             Spacer(minLength: 24)
 
-            // Footer requested: centered at bottom
             Text("Tallied on \(talliedOn)")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -294,22 +303,54 @@ private struct ResultsPDFView: View {
     }
 }
 
-// MARK: - Share sheet wrapper
+// MARK: - UIKit share presenter
 
-private struct ResultsShareSheet: UIViewControllerRepresentable {
-    let activityItems: [Any]
-    let onComplete: (_ completed: Bool, _ error: Error?) -> Void
+private enum ShareUtil {
+    @MainActor
+    static func present(url: URL, onComplete: @escaping (_ completed: Bool, _ error: Error?) -> Void) {
+        guard let topVC = topViewController() else {
+            onComplete(false, NSError(domain: "TwistTally", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active view controller"]))
+            return
+        }
 
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-        controller.completionWithItemsHandler = { _, completed, _, error in
+        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        activity.completionWithItemsHandler = { _, completed, _, error in
             onComplete(completed, error)
         }
-        return controller
+
+        if let pop = activity.popoverPresentationController {
+            pop.sourceView = topVC.view
+            pop.sourceRect = CGRect(x: topVC.view.bounds.midX, y: topVC.view.bounds.midY, width: 1, height: 1)
+            pop.permittedArrowDirections = []
+        }
+
+        topVC.present(activity, animated: true)
     }
 
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        // Nothing to update
+    @MainActor
+    private static func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .filter { $0.activationState == .foregroundActive }
+
+        let keyWindow = scenes
+            .flatMap { $0.windows }
+            .first(where: { $0.isKeyWindow })
+
+        guard var top = keyWindow?.rootViewController else { return nil }
+
+        while let presented = top.presentedViewController {
+            top = presented
+        }
+
+        if let nav = top as? UINavigationController {
+            return nav.visibleViewController ?? nav
+        }
+        if let tab = top as? UITabBarController {
+            return tab.selectedViewController ?? tab
+        }
+
+        return top
     }
 }
 

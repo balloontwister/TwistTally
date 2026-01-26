@@ -9,6 +9,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 
 // MARK: - Models
 
@@ -94,7 +95,7 @@ final class TallyStore: ObservableObject {
         // deterministic fallback: based on count
         return accentPalette[contests.count % accentPalette.count]
     }
-    
+
     // Persisted
     @Published var contests: [Contest] = [
         Contest(name: "Contest A", entrants: (1...12).map { Entrant(name: "Entrant \($0)") }, accentHex: "#8B5CF6"),
@@ -241,6 +242,66 @@ final class TallyStore: ObservableObject {
                 self.scheduleSave()
             }
         )
+    }
+
+    // MARK: - Reset / Delete (requested placeholders)
+
+    /// Sets all entrant scores in the current contest to 0 and clears undo history.
+    func resetCurrentContest() {
+        guard let cIdx = currentContestIndex else { return }
+        let contestID = contests[cIdx].id
+        for i in contests[cIdx].entrants.indices {
+            contests[cIdx].entrants[i].score = 0
+        }
+        undoByContest[contestID] = []
+        showBanner("Contest reset.")
+        scheduleSave()
+    }
+
+    /// Deletes the currently selected contest.
+    func deleteCurrentContest() {
+        guard let cIdx = currentContestIndex else { return }
+        let contestID = contests[cIdx].id
+        contests.remove(at: cIdx)
+        undoByContest[contestID] = nil
+
+        // Keep selection valid
+        selectedContestID = contests.first?.id
+
+        showBanner("Contest deleted.")
+        scheduleSave()
+    }
+
+    /// Resets scores for all contests and clears all undo history.
+    func resetAllContests() {
+        for c in contests.indices {
+            for e in contests[c].entrants.indices {
+                contests[c].entrants[e].score = 0
+            }
+        }
+        undoByContest = [:]
+        showBanner("All contests reset.")
+        scheduleSave()
+    }
+
+    /// Deletes all contests.
+    func deleteAllContests() {
+        contests.removeAll()
+        selectedContestID = nil
+        undoByContest = [:]
+        showBanner("All contests deleted.")
+        scheduleSave()
+    }
+
+    // MARK: - Import / Export (JSON backup)
+
+    /// Replaces all contests with imported data and sets the selected contest.
+    func replaceAllContests(contests newContests: [Contest], selectedID: UUID?) {
+        contests = newContests
+        selectedContestID = selectedID ?? newContests.first?.id
+        undoByContest = [:]
+        showBanner("Imported contests.")
+        scheduleSave()
     }
 
     // MARK: - Banner

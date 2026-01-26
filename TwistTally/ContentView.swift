@@ -8,36 +8,29 @@
 import SwiftUI
 import UIKit
 import Combine
+import UniformTypeIdentifiers
 
 struct ContentView: View {
 
     // MARK: - Store
-
     @StateObject private var store = TallyStore()
 
     // MARK: - UI State
-
     @State private var isShowingEditEntrants = false
     @State private var isShowingManage = false
 
-    // Summary & Export sheet
+    // Results & Export sheet
     @State private var isShowingSummaryExport = false
 
     // MARK: - Grid Layout
-
     private let columns: [GridItem] = [
         GridItem(.adaptive(minimum: 120), spacing: 12)
     ]
 
     // MARK: - Per-contest accent (drives “we switched contests” feel)
-
     private var contestAccent: Color {
         guard let idx = store.currentContestIndex else { return Color("BrandAccent") }
         return Color(hex: store.contests[idx].accentHex)
-    }
-
-    private var contestAccentSoft: Color {
-        contestAccent.opacity(0.18)
     }
 
     private var currentEntrants: [Entrant] {
@@ -46,11 +39,9 @@ struct ContentView: View {
     }
 
     // MARK: - Body
-
     var body: some View {
         NavigationStack {
             mainLayout
-                // Top-left inline logo + app title
                 .toolbar { appTitleToolbar }
 
                 // Persist contest selection changes (keeps save logic consistent)
@@ -65,7 +56,7 @@ struct ContentView: View {
                 // Sheets
                 .sheet(isPresented: $isShowingEditEntrants) { editEntrantsSheet }
 
-                // Summary & Export sheet
+                // Results & Export sheet
                 .sheet(isPresented: $isShowingSummaryExport) {
                     ResultsExportView(store: store)
                 }
@@ -73,7 +64,6 @@ struct ContentView: View {
     }
 
     // MARK: - Toolbar (logo + app title stays flush-left)
-
     private var appTitleToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             HStack(spacing: 8) {
@@ -89,7 +79,6 @@ struct ContentView: View {
     }
 
     // MARK: - Main Layout
-
     private var mainLayout: some View {
         VStack(spacing: 0) {
             topBar
@@ -103,7 +92,6 @@ struct ContentView: View {
     // ✅ Contest name centered
     // ✅ Top 5 strip centered below contest name
     // ✅ Manage flush-right (popover)
-
     private var topBar: some View {
         ZStack(alignment: .top) {
 
@@ -130,9 +118,8 @@ struct ContentView: View {
                     }
                 )
                 .padding(.top, 6)
-
             }
-            .padding(.top, 38)   //  reserves space for Undo/Manage row
+            .padding(.top, 38) // reserves space for Undo/Manage row
 
             // LEFT + RIGHT overlay
             HStack {
@@ -146,14 +133,13 @@ struct ContentView: View {
 
                 Spacer()
 
-                // RIGHT: Manage
                 Button {
                     isShowingManage = true
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.title3)
-                        .padding(.vertical, 4)   // gives a clean hit area + stable popover anchor
+                        .padding(.vertical, 4) // clean hit area + stable popover anchor
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -161,7 +147,7 @@ struct ContentView: View {
                 .popover(isPresented: $isShowingManage, arrowEdge: .top) {
                     ManagePopover(
                         store: store,
-                        onOpenSummary: {
+                        onOpenResults: {
                             isShowingManage = false
                             isShowingSummaryExport = true
                         },
@@ -180,15 +166,14 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal)
-            .padding(.top, 2)   // optional: pins controls a tad lower from the top edge
+            .padding(.top, 2)
         }
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
-        .frame(minHeight: 130) // optional bump; can keep 110 if you want
+        .frame(minHeight: 130)
     }
 
     // MARK: - Main Content
-
     private var mainContent: some View {
         Group {
             if let contestIndex = store.currentContestIndex {
@@ -209,7 +194,6 @@ struct ContentView: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(contest.entrants) { entrant in
-                    // Entrant tile gets per-contest accent + animated gradient flash
                     EntrantTile(
                         name: entrant.name,
                         score: entrant.score,
@@ -224,7 +208,6 @@ struct ContentView: View {
     }
 
     // MARK: - Banner
-
     private var bannerOverlay: some View {
         Group {
             if let msg = store.bannerMessage {
@@ -236,7 +219,6 @@ struct ContentView: View {
     }
 
     // MARK: - Sheets
-
     private var editEntrantsSheet: some View {
         Group {
             let entrantsBinding = store.bindingForSelectedEntrants()
@@ -253,14 +235,11 @@ struct ContentView: View {
 }
 
 // MARK: - Manage Popover
-// Contains contest switching + inline New/Rename flows + Summary & Export + Edit Entrants.
-
+// Contains contest switching + inline New/Rename flows + Results + Backup Export/Import + placeholders.
 private struct ManagePopover: View {
     @ObservedObject var store: TallyStore
 
-    // Summary & Export entrypoint
-    let onOpenSummary: () -> Void
-
+    let onOpenResults: () -> Void
     let onEditEntrants: () -> Void
     let onDone: () -> Void
 
@@ -273,6 +252,66 @@ private struct ManagePopover: View {
     @State private var screen: Screen = .menu
     @State private var newContestName: String = ""
     @State private var renameName: String = ""
+
+    // MARK: - About
+    @State private var isShowingAbout = false
+
+    // MARK: - Backup / Import-Export state
+    @State private var isExportingBackup = false
+    @State private var backupData = Data()
+    @State private var isImportingBackup = false
+
+    // MARK: - Destructive action confirmation
+    private enum DestructiveAction: Identifiable {
+        case resetCurrent
+        case deleteCurrent
+        case resetAll
+        case deleteAll
+
+        var id: String {
+            switch self {
+            case .resetCurrent: return "resetCurrent"
+            case .deleteCurrent: return "deleteCurrent"
+            case .resetAll: return "resetAll"
+            case .deleteAll: return "deleteAll"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .resetCurrent: return "Reset this contest?"
+            case .deleteCurrent: return "Delete this contest?"
+            case .resetAll: return "Reset ALL contests?"
+            case .deleteAll: return "Delete ALL contests?"
+            }
+        }
+
+        var message: String {
+            switch self {
+            case .resetCurrent:
+                return "This will set all scores in the current contest back to 0. This cannot be undone."
+            case .deleteCurrent:
+                return "This will permanently remove the current contest and its entrants/scores. This cannot be undone."
+            case .resetAll:
+                return "This will set all scores in every contest back to 0. This cannot be undone."
+            case .deleteAll:
+                return "This will permanently remove ALL contests and their entrants/scores. This cannot be undone."
+            }
+        }
+
+        var confirmButtonTitle: String {
+            switch self {
+            case .resetCurrent: return "Reset Contest"
+            case .deleteCurrent: return "Delete Contest"
+            case .resetAll: return "Reset All"
+            case .deleteAll: return "Delete All"
+            }
+        }
+    }
+
+    @State private var pendingDestructive: DestructiveAction? = nil
+    @State private var showSuccessAlert = false
+    @State private var successMessage = ""
 
     // Helps create internal padding when keyboard appears (still imperfect in popovers)
     @StateObject private var keyboard = KeyboardObserver()
@@ -294,6 +333,61 @@ private struct ManagePopover: View {
                         Button("Done") { onDone() }
                     }
                 }
+                .alert("Done", isPresented: $showSuccessAlert) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text(successMessage)
+                }
+                // About screen (simple help + purpose)
+                .sheet(isPresented: $isShowingAbout) {
+                    AboutView()
+                }
+        }
+        // ✅ Export backup to Files
+        .fileExporter(
+            isPresented: $isExportingBackup,
+            document: JSONBackupDocument(data: backupData),
+            contentType: .json,
+            defaultFilename: ExportUtil.safeFileComponent("TwistTally_Contests_Backup") + "_" + ExportUtil.timestamp()
+        ) { _ in
+            // (No-op) The system handles success/cancel here.
+        }
+        // ✅ Import backup from Files (REPLACES all contests)
+        .fileImporter(
+            isPresented: $isImportingBackup,
+            allowedContentTypes: [.json]
+        ) { result in
+            do {
+                let url = try result.get()
+
+                // ✅ iPad Files access: request permission to read this file URL
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess { url.stopAccessingSecurityScopedResource() }
+                }
+
+                let data = try Data(contentsOf: url)
+
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+
+                // Preferred: full PersistedState snapshot (includes selectedContestID)
+                if let state = try? decoder.decode(PersistedState.self, from: data) {
+                    store.replaceAllContests(contests: state.contests, selectedID: state.selectedContestID)
+                    store.showBanner("Imported contests (replaced).")
+                    screen = .menu
+                    return
+                }
+
+                // Fallback: just [Contest]
+                let contests = try decoder.decode([Contest].self, from: data)
+                store.replaceAllContests(contests: contests, selectedID: contests.first?.id)
+                store.showBanner("Imported contests (replaced).")
+                screen = .menu
+
+            } catch {
+                store.showBanner("Import failed: \(error.localizedDescription)")
+            }
         }
         .onAppear {
             if let idx = store.currentContestIndex {
@@ -316,9 +410,10 @@ private struct ManagePopover: View {
     }
 
     // MARK: - Menu
-
     private var menuView: some View {
         Form {
+
+            // Contest selection + create/rename
             Section("Contest") {
                 Picker("Current Contest", selection: $store.selectedContestID) {
                     ForEach(store.contests) { contest in
@@ -343,11 +438,35 @@ private struct ManagePopover: View {
                     Label("Rename Contest", systemImage: "square.and.pencil")
                 }
                 .disabled(store.currentContestIndex == nil)
+
+                // Edit entrants belongs with the other *current contest* actions.
+                Button {
+                    onEditEntrants()
+                } label: {
+                    Label("Edit Entrants", systemImage: "person.3")
+                }
+                .disabled(store.currentContestIndex == nil)
+
+                // Placeholder buttons under Rename Contest (current contest)
+                Button(role: .destructive) {
+                    pendingDestructive = .resetCurrent
+                } label: {
+                    Label("Reset Contest", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(store.currentContestIndex == nil)
+
+                Button(role: .destructive) {
+                    pendingDestructive = .deleteCurrent
+                } label: {
+                    Label("Delete Contest", systemImage: "trash")
+                }
+                .disabled(store.currentContestIndex == nil)
             }
 
+            // Results
             Section("Results") {
                 Button {
-                    onOpenSummary()
+                    onOpenResults()
                 } label: {
                     Label("Results & Export", systemImage: "square.and.arrow.up")
                 }
@@ -357,14 +476,72 @@ private struct ManagePopover: View {
                     .foregroundStyle(.secondary)
             }
 
-            if store.currentContestIndex != nil {
-                Section("Edit") {
-                    Button {
-                        onEditEntrants()
-                    } label: {
-                        Label("Edit Entrants", systemImage: "person.3")
-                    }
+            // About / Help
+            Section("About") {
+                Button {
+                    isShowingAbout = true
+                } label: {
+                    Label("About Twist & Tally", systemImage: "info.circle")
                 }
+
+                Text("Quick tips, how it works, and why this app exists.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Backup export/import
+            Section("Backup") {
+                Button {
+                    // Versioned snapshot (contests + selected ID)
+                    let snapshot = PersistedState(
+                        schemaVersion: PersistedState.currentSchemaVersion,
+                        contests: store.contests,
+                        selectedContestID: store.selectedContestID
+                    )
+
+                    do {
+                        let encoder = JSONEncoder()
+                        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                        encoder.dateEncodingStrategy = .iso8601
+                        backupData = try encoder.encode(snapshot)
+                        isExportingBackup = true
+                    } catch {
+                        store.showBanner("Could not create backup.")
+                    }
+                } label: {
+                    Label("Export Contests (.json)", systemImage: "square.and.arrow.up")
+                }
+
+                Button {
+                    isImportingBackup = true
+                } label: {
+                    Label("Import Contests (.json)", systemImage: "square.and.arrow.down")
+                }
+
+                Text("Export a backup you can re-import later. Import replaces the current contests.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Placeholder buttons for ALL contests
+            Section("All Contests") {
+                Button(role: .destructive) {
+                    pendingDestructive = .resetAll
+                } label: {
+                    Label("Reset All Contests", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(store.contests.isEmpty)
+
+                Button(role: .destructive) {
+                    pendingDestructive = .deleteAll
+                } label: {
+                    Label("Delete All Contests", systemImage: "trash.slash")
+                }
+                .disabled(store.contests.isEmpty)
+
+                Text("These actions affect every contest in the app.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -373,10 +550,52 @@ private struct ManagePopover: View {
                     .foregroundStyle(.secondary)
             }
         }
+        // NOTE: On iPad, `.confirmationDialog` often presents from the bottom (action-sheet style),
+        // even when attached to a view inside a popover.
+        // Using `.alert` keeps the confirmation centered within the current presentation.
+        .alert(
+            pendingDestructive?.title ?? "Confirm",
+            isPresented: Binding(
+                get: { pendingDestructive != nil },
+                set: { if !$0 { pendingDestructive = nil } }
+            )
+        ) {
+            Button(pendingDestructive?.confirmButtonTitle ?? "Confirm", role: .destructive) {
+                guard let action = pendingDestructive else { return }
+                pendingDestructive = nil
+
+                switch action {
+                case .resetCurrent:
+                    store.resetCurrentContest()
+                    store.showBanner("Contest reset.")
+                    successMessage = "Contest scores were reset to 0."
+                case .deleteCurrent:
+                    store.deleteCurrentContest()
+                    store.showBanner("Contest deleted.")
+                    successMessage = "Contest was deleted."
+                case .resetAll:
+                    store.resetAllContests()
+                    store.showBanner("All contests reset.")
+                    successMessage = "All contest scores were reset to 0."
+                case .deleteAll:
+                    store.deleteAllContests()
+                    store.showBanner("All contests deleted.")
+                    successMessage = "All contests were deleted."
+                }
+
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                showSuccessAlert = true
+            }
+
+            Button("Cancel", role: .cancel) {
+                pendingDestructive = nil
+            }
+        } message: {
+            Text(pendingDestructive?.message ?? "")
+        }
     }
 
-    // MARK: - New Contest (ScrollView so it can move internally)
-
+    // MARK: - New Contest
     private var newContestView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -403,8 +622,7 @@ private struct ManagePopover: View {
         }
     }
 
-    // MARK: - Rename (ScrollView so it can move internally)
-
+    // MARK: - Rename Contest
     private var renameView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -416,7 +634,6 @@ private struct ManagePopover: View {
                     .textFieldStyle(.roundedBorder)
 
                 Button {
-                    // Use store’s binding (compiler-safe) to commit rename
                     let binding = store.bindingForCurrentContestName()
                     binding.wrappedValue = renameName
                     screen = .menu
@@ -433,11 +650,9 @@ private struct ManagePopover: View {
     }
 }
 
-
-/// A tiny “bounce” animation that triggers whenever `value` changes.
+// MARK: - Small “bounce” score text for leaderboard
 struct BouncyScoreText: View {
     let value: Int
-
     @State private var bump = false
 
     var body: some View {
@@ -448,7 +663,6 @@ struct BouncyScoreText: View {
             .scaleEffect(bump ? 1.18 : 1.0)
             .animation(.spring(response: 0.18, dampingFraction: 0.55), value: bump)
             .onChange(of: value) { _, _ in
-                // Trigger a quick “up then back” bounce.
                 bump = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                     bump = false
@@ -458,12 +672,7 @@ struct BouncyScoreText: View {
     }
 }
 
-// MARK: - Top 5 Strip (responsive + per-contest accent)
-//  In landscape: 5 across
-//  In portrait/compact: 3 + 2 layout
-//  Accent color changes with contest selection
-//  NEW: leaderboard buttons flash + sweep feedback on tap
-
+// MARK: - Top 5 Strip (responsive + per-contest accent + flash feedback)
 struct TopFiveStrip: View {
     let entrants: [Entrant]
     let accent: Color
@@ -479,7 +688,6 @@ struct TopFiveStrip: View {
             .map { $0 }
     }
 
-    // NEW: feedback state for a quick flash on the tapped leaderboard slot
     @State private var flashIndex: Int? = nil
     @State private var sweep = false
 
@@ -530,17 +738,11 @@ struct TopFiveStrip: View {
             let entrant = items[index]
 
             Button {
-                // Action
                 onTapEntrant(entrant.id)
-
-                // Haptic feedback (same feel as tile taps)
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-
-                // Visual feedback: flash the button that was tapped
                 animateFlash(for: index)
             } label: {
                 ZStack {
-                    // Base content
                     VStack(spacing: 2) {
                         Text(entrant.name)
                             .font(.caption)
@@ -552,7 +754,6 @@ struct TopFiveStrip: View {
                     .padding(.vertical, 6)
                     .frame(minWidth: width, minHeight: 44)
 
-                    // NEW: quick sweep overlay
                     leaderboardFlash
                         .opacity(flashIndex == index ? 1 : 0)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -580,8 +781,6 @@ struct TopFiveStrip: View {
         }
     }
 
-    // MARK: - Flash overlay (same “language” as entrant tile)
-
     private var leaderboardFlash: some View {
         LinearGradient(
             colors: [
@@ -594,8 +793,8 @@ struct TopFiveStrip: View {
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
-        .rotationEffect(.degrees(10))               // slightly less rotation than tiles
-        .offset(x: sweep ? 36 : -36)                // smaller sweep distance than tiles
+        .rotationEffect(.degrees(10))
+        .offset(x: sweep ? 36 : -36)
         .blendMode(.plusLighter)
         .animation(.easeOut(duration: 0.18), value: sweep)
     }
@@ -603,12 +802,9 @@ struct TopFiveStrip: View {
     private func animateFlash(for index: Int) {
         flashIndex = index
         sweep = false
-
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
             sweep = true
         }
-
-        // clear quickly
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             flashIndex = nil
             sweep = false
@@ -617,7 +813,6 @@ struct TopFiveStrip: View {
 }
 
 // MARK: - Tap feedback style
-
 struct TallyPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -626,13 +821,7 @@ struct TallyPressStyle: ButtonStyle {
     }
 }
 
-// MARK: - Entrant Tile
-// ✅ Per-contest accent
-// ✅ Animated “gradient sweep” flash on +1
-// ✅ Watermark "+" with subtle pulse
-// ✅ Score badge uses accent
-// ✅ VoiceOver label includes name + score
-
+// MARK: - Entrant Tile (flash + watermark pulse)
 struct EntrantTile: View {
     let name: String
     let score: Int
@@ -643,8 +832,6 @@ struct EntrantTile: View {
 
     @State private var flash = false
     @State private var sweep = false
-
-    // NEW: watermark pulse
     @State private var pulse = false
 
     var body: some View {
@@ -655,15 +842,12 @@ struct EntrantTile: View {
         } label: {
             ZStack(alignment: .topTrailing) {
 
-                // Base tile
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Color("TileBackground"))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
                             .strokeBorder(accent.opacity(0.28), lineWidth: 1)
                     )
-
-                    // ✅ Centered watermark "+" (decorative)
                     .overlay(alignment: .center) {
                         Image(systemName: "plus")
                             .font(.system(size: 72, weight: .bold))
@@ -674,13 +858,10 @@ struct EntrantTile: View {
                             .animation(.easeOut(duration: 0.18), value: pulse)
                             .accessibilityHidden(true)
                     }
-
-                    // ✅ Gradient sweep flash overlay on tap
                     .overlay(
                         gradientFlash.mask(RoundedRectangle(cornerRadius: 16))
                     )
 
-                // Score badge
                 Text("\(score)")
                     .font(.subheadline)
                     .fontWeight(.semibold)
@@ -693,17 +874,14 @@ struct EntrantTile: View {
                     .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 1))
                     .padding(8)
 
-                // Entrant name (no repeated hint text needed now)
                 VStack(spacing: 6) {
                     Spacer(minLength: 6)
-
                     Text(name)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 6)
                 }
-                // Reserve space beneath the score badge
                 .padding(.top, 28)
                 .padding(.bottom, 8)
             }
@@ -714,7 +892,6 @@ struct EntrantTile: View {
     }
 
     private var gradientFlash: some View {
-        // Diagonal sweep that animates across the tile on tap
         LinearGradient(
             colors: [
                 accent.opacity(0.0),
@@ -734,24 +911,16 @@ struct EntrantTile: View {
     }
 
     private func animateFlash() {
-        // Flash + sweep
         flash = true
         sweep = false
-
-        // Watermark pulse
         pulse = true
 
-        // Kick the sweep very slightly after tap
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
             sweep = true
         }
-
-        // Reset pulse quickly
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             pulse = false
         }
-
-        // Fade out flash
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             flash = false
         }
@@ -759,10 +928,8 @@ struct EntrantTile: View {
 }
 
 // MARK: - Banner
-
 struct UndoBanner: View {
     let message: String
-
     var body: some View {
         Text(message)
             .font(.subheadline)
@@ -776,7 +943,6 @@ struct UndoBanner: View {
 }
 
 // MARK: - Edit Entrants Sheet
-
 struct EditEntrantsSheet: View {
     let contestName: String
     @Binding var entrants: [Entrant]
@@ -788,11 +954,14 @@ struct EditEntrantsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Text("Delete: swipe left on a row, or tap Edit.")
+                // Instructions (shown under the title; not inside an input-looking box)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Tip: Swipe left to delete. Tap Edit to rename or reorder (drag the handles).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .listRowBackground(Color.clear)
 
                 Section("Add Entrant") {
                     HStack {
@@ -811,7 +980,7 @@ struct EditEntrantsSheet: View {
                     }
                 }
 
-                Section("Entrants") {
+                Section {
                     ForEach($entrants) { $entrant in
                         HStack {
                             TextField("Entrant name", text: $entrant.name)
@@ -821,10 +990,18 @@ struct EditEntrantsSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    // ✅ Allow drag-reordering when the user taps the Edit button.
+                    // This is considered a structural change, so we clear undo history.
+                    .onMove { fromOffsets, toOffset in
+                        entrants.move(fromOffsets: fromOffsets, toOffset: toOffset)
+                        onStructuralChange()
+                    }
                     .onDelete { indexSet in
                         entrants.remove(atOffsets: indexSet)
                         onStructuralChange()
                     }
+                } header: {
+                    Text("Entrants")
                 }
             }
             .navigationTitle("Edit Entrants")
@@ -844,12 +1021,8 @@ struct EditEntrantsSheet: View {
 }
 
 // MARK: - Keyboard Observer
-// Used to pad internal content when the keyboard appears.
-// (Popover + keyboard on iPad landscape can still be quirky; this helps but isn’t perfect.)
-
 final class KeyboardObserver: ObservableObject {
     @Published var height: CGFloat = 0
-
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -870,8 +1043,6 @@ final class KeyboardObserver: ObservableObject {
 }
 
 // MARK: - Hex Color Helper
-// Allows Color(hex: "#RRGGBB") for the per-contest accent.
-
 private extension Color {
     init(hex: String) {
         var s = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -887,12 +1058,29 @@ private extension Color {
     }
 }
 
+// MARK: - JSON Backup Document (for .fileExporter)
+private struct JSONBackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var data: Data
+
+    init(data: Data = Data()) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        self.data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
 
 // MARK: - Results & Export View
-// This is presented as a sheet from the Manage popover.
-// It shows a per-contest leaderboard, and provides Share actions for:
+// Presented as a sheet from the Manage popover.
+// Shares:
 // 1) Results PDF (organizer-friendly)
-// 2) Full CSV (all entrants, grouped by contest)
+// 2) All scores CSV (grouped by contest; entrants sorted by score desc)
 
 struct ResultsExportView: View {
     @ObservedObject var store: TallyStore
@@ -903,7 +1091,7 @@ struct ResultsExportView: View {
     @State private var isShowingShare = false
     @State private var shareItems: [Any] = []
 
-    // Simple post-share feedback
+    // Post-share feedback
     @State private var showResultAlert = false
     @State private var resultMessage = ""
 
@@ -912,7 +1100,7 @@ struct ResultsExportView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
 
-                    // Action buttons (top of sheet)
+                    // Action buttons (top)
                     VStack(spacing: 10) {
                         Button {
                             shareResultsPDF()
@@ -963,12 +1151,7 @@ struct ResultsExportView: View {
         .sheet(isPresented: $isShowingShare) {
             ActivityViewController(items: shareItems) { completed, _ in
                 // This callback fires when the share sheet is dismissed.
-                // We only show success if the user completed an action.
-                if completed {
-                    resultMessage = "Shared successfully."
-                } else {
-                    resultMessage = "Share canceled."
-                }
+                resultMessage = completed ? "Shared successfully." : "Share canceled."
                 showResultAlert = true
             }
         }
@@ -982,10 +1165,10 @@ struct ResultsExportView: View {
     // MARK: - Share actions
 
     private func shareResultsPDF() {
-        // Build a SwiftUI view for the PDF content
+        // Build the SwiftUI content we want rendered into the PDF.
         let pdfView = ResultsPDFView(contests: store.contests)
 
-        // Render to PDF URL
+        // Render to a temp PDF URL.
         guard let url = PDFExporter.makePDF(
             title: "TwistTally_Results_\(ExportUtil.timestamp())",
             view: pdfView,
@@ -1000,12 +1183,11 @@ struct ResultsExportView: View {
     }
 
     private func shareAllScoresCSV() {
-        // CSV is grouped by contest (each contest section sorted by score desc).
-        // This avoids mixing contests together in one big ranking.
+        // CSV grouped by contest; each contest sorted by score desc (tie: name).
         let csv = CSVExporter.makeGroupedScoresCSV(contests: store.contests)
 
         let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("TwistTally_AllScores_\(ExportUtil.timestamp()).csv")
+            .appendingPathComponent(ExportUtil.csvFileName(prefix: "TwistTally_AllScores"))
 
         do {
             try csv.data(using: .utf8)?.write(to: fileURL, options: .atomic)
@@ -1017,8 +1199,7 @@ struct ResultsExportView: View {
     }
 
     private func presentShare(items: [Any]) {
-        // Avoid the “blank share sheet the first time” issue by setting items
-        // and presenting on the next run loop.
+        // Avoid first-present timing issues by presenting on the next run loop.
         shareItems = items
         DispatchQueue.main.async {
             isShowingShare = true
@@ -1027,7 +1208,6 @@ struct ResultsExportView: View {
 }
 
 // MARK: - Results PDF content
-// This is the SwiftUI view we render into a PDF.
 
 private struct ResultsPDFView: View {
     let contests: [Contest]
@@ -1037,10 +1217,6 @@ private struct ResultsPDFView: View {
             Text("Twist & Tally — Results")
                 .font(.title)
                 .fontWeight(.bold)
-
-            Text("Tallied on \(ExportUtil.timestamp())")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
 
             Divider()
 
@@ -1070,7 +1246,7 @@ private struct ResultsPDFView: View {
 private struct ResultsContestCard: View {
     let contest: Contest
 
-    // Sort entrants by score desc, tie-break by name
+    // Sort entrants by score desc, tie-break by name.
     private var sortedEntrants: [Entrant] {
         contest.entrants.sorted {
             if $0.score != $1.score { return $0.score > $1.score }
@@ -1083,7 +1259,7 @@ private struct ResultsContestCard: View {
             Text(contest.name)
                 .font(.headline)
 
-            // Leaderboard list (show top 10; if you want all, remove prefix)
+            // Leaderboard list (top 10)
             ForEach(Array(sortedEntrants.prefix(10).enumerated()), id: \.element.id) { i, e in
                 HStack {
                     Text("#\(i + 1)")
@@ -1134,4 +1310,99 @@ private struct ActivityViewController: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+
+
+
+// MARK: - About View
+// A lightweight, organizer-friendly explanation of what the app does.
+
+private struct AboutView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+
+                    Text("Twist & Tally")
+                        .font(.title)
+                        .fontWeight(.bold)
+
+                    Text("A fast, simple tally counter for balloon jams, contests, and live judging.")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+
+                    Divider()
+
+                    Group {
+                        Text("How to use")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Tap an entrant tile to add +1.", systemImage: "hand.tap")
+                            Label("Use Undo to revert the last few taps (per contest).", systemImage: "arrow.uturn.backward")
+                            Label("Use Manage to add/rename contests and edit entrants.", systemImage: "ellipsis.circle")
+                            Label("Use Results & Export to share a PDF leaderboard or a CSV of scores.", systemImage: "square.and.arrow.up")
+                        }
+                        .font(.body)
+                    }
+
+                    Group {
+                        Text("Results")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+
+                        Text("The Results screen is what you send to organizers. It shows each contest’s leaderboard and exports:")
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Results PDF: clean leaderboards for printing or sharing.", systemImage: "doc.richtext")
+                            Label("All Scores CSV: every entrant, grouped by contest, sorted by score.", systemImage: "tablecells")
+                        }
+                        .font(.body)
+                    }
+
+                    Group {
+                        Text("Backup")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+
+                        Text("You can export your contests to a .json backup file and import it later. Import replaces the current contests.")
+                            .font(.body)
+                    }
+
+                    Group {
+                        Text("Why it was made")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+
+                        Text("This app was built to keep scoring fast and reliable during live events—no spreadsheets, no accidental edits, and no hunting for the right screen when the room is loud.")
+                            .font(.body)
+                    }
+
+                    Group {
+                        Text("About the developer")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+
+                        Text("Twist & Tally was created by Todd Neufeld, a professional balloon artist, educator, and event producer. The app grew out of real-world judging and balloon jam scenarios where fast, distraction-free scoring mattered more than complex tools.")
+                            .font(.body)
+                    }
+
+                    Spacer(minLength: 24)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .navigationTitle("About")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
 }
