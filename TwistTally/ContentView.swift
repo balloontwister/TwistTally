@@ -1102,9 +1102,20 @@ struct ResultsExportView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // Share sheet state
-    @State private var isShowingShare = false
-    @State private var shareItems: [Any] = []
+    // Share sheet payload (using `.sheet(item:)` ensures the sheet is created
+    // only after the payload exists, avoiding the “blank share sheet first time” issue).
+    private struct SharePayload: Identifiable {
+        let id = UUID()
+        let items: [Any]
+        let kind: Kind
+
+        enum Kind {
+            case pdf
+            case csv
+        }
+    }
+
+    @State private var sharePayload: SharePayload? = nil
 
     // Post-share feedback
     @State private var showResultAlert = false
@@ -1163,11 +1174,14 @@ struct ResultsExportView: View {
                 }
             }
         }
-        .sheet(isPresented: $isShowingShare) {
-            ActivityViewController(items: shareItems) { completed, _ in
-                // This callback fires when the share sheet is dismissed.
+        .sheet(item: $sharePayload) { payload in
+            ActivityViewController(items: payload.items) { completed, _ in
+                // Fires when the share sheet is dismissed.
                 resultMessage = completed ? "Shared successfully." : "Share canceled."
                 showResultAlert = true
+
+                // Clear payload so the next share always creates a fresh controller.
+                sharePayload = nil
             }
         }
         .alert("Results", isPresented: $showResultAlert) {
@@ -1194,7 +1208,7 @@ struct ResultsExportView: View {
             return
         }
 
-        presentShare(items: [url])
+        presentShare(items: [url], kind: .pdf)
     }
 
     private func shareAllScoresCSV() {
@@ -1206,18 +1220,21 @@ struct ResultsExportView: View {
 
         do {
             try csv.data(using: .utf8)?.write(to: fileURL, options: .atomic)
-            presentShare(items: [fileURL])
+            presentShare(items: [fileURL], kind: .csv)
         } catch {
             resultMessage = "Could not write CSV file."
             showResultAlert = true
         }
     }
 
-    private func presentShare(items: [Any]) {
-        // Avoid first-present timing issues by presenting on the next run loop.
-        shareItems = items
+    private func presentShare(items: [Any], kind: SharePayload.Kind) {
+        // Ensure any alert isn’t competing with the share sheet.
+        showResultAlert = false
+
+        // Create a fresh payload so SwiftUI builds a brand-new UIActivityViewController.
+        // Presenting on the next run loop helps iPadOS avoid a “blank first sheet” glitch.
         DispatchQueue.main.async {
-            isShowingShare = true
+            sharePayload = SharePayload(items: items, kind: kind)
         }
     }
 }
