@@ -191,19 +191,47 @@ struct ContentView: View {
     }
 
     private func scoringView(contest: Contest) -> some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(contest.entrants) { entrant in
-                    EntrantTile(
-                        name: entrant.name,
-                        score: entrant.score,
-                        accent: contestAccent
-                    ) {
-                        store.increment(entrantID: entrant.id)
+        GeometryReader { geo in
+            // Dynamically size the grid based on how many entrants we have.
+            // Fewer entrants => bigger tiles (easier to tap)
+            // Many entrants  => smaller tiles (more visible on screen)
+            let count = contest.entrants.count
+
+            let minTileWidth: CGFloat = {
+                if count <= 12 { return 180 }
+                if count <= 20 { return 150 }
+                if count <= 35 { return 120 }
+                return 105
+            }()
+
+            let tileHeight: CGFloat = {
+                if count <= 12 { return 124 }
+                if count <= 20 { return 114 }
+                if count <= 35 { return 105 }
+                return 96
+            }()
+
+            let dynamicColumns: [GridItem] = [
+                GridItem(.adaptive(minimum: minTileWidth), spacing: 12)
+            ]
+
+            ScrollView {
+                LazyVGrid(columns: dynamicColumns, spacing: 12) {
+                    ForEach(contest.entrants) { entrant in
+                        EntrantTile(
+                            name: entrant.name,
+                            score: entrant.score,
+                            accent: contestAccent,
+                            height: tileHeight
+                        ) {
+                            store.increment(entrantID: entrant.id)
+                        }
                     }
                 }
+                .padding(12)
+                // Keep the ScrollView content from collapsing when embedded in GeometryReader
+                .frame(minWidth: geo.size.width)
             }
-            .padding(12)
         }
     }
 
@@ -693,6 +721,51 @@ struct TopFiveStrip: View {
     let accent: Color
     let onTapEntrant: (UUID) -> Void
 
+    private struct CornerRibbon: View {
+        let text: String
+        let color: Color
+
+        private struct RibbonShape: Shape {
+            func path(in rect: CGRect) -> Path {
+                var p = Path()
+                let w = rect.width
+                let h = rect.height
+                let notch = min(h * 0.45, w * 0.20)
+
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addLine(to: CGPoint(x: w, y: 0))
+                p.addLine(to: CGPoint(x: w, y: h - notch))
+                p.addLine(to: CGPoint(x: w - notch, y: h))
+                p.addLine(to: CGPoint(x: notch, y: h))
+                p.addLine(to: CGPoint(x: 0, y: h - notch))
+                p.closeSubpath()
+                return p
+            }
+        }
+
+        var body: some View {
+            ZStack {
+                RibbonShape()
+                    .fill(color)
+
+                RibbonShape()
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+
+                Text(text)
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 56, height: 18)
+            .rotationEffect(.degrees(-45))
+            .offset(x: -18, y: -14)
+            .shadow(radius: 1.5, y: 1)
+            .accessibilityHidden(true)
+        }
+    }
+    
+    
     private var topFive: [Entrant] {
         entrants
             .sorted { lhs, rhs in
@@ -705,6 +778,10 @@ struct TopFiveStrip: View {
 
     @State private var flashIndex: Int? = nil
     @State private var sweep = false
+
+    // NEW: pulse the rank badge when the occupant of a slot changes
+    @State private var slotPulse: [Bool] = Array(repeating: false, count: 5)
+    @State private var lastSlotEntrantIDs: [UUID?] = Array(repeating: nil, count: 5)
 
     var body: some View {
         GeometryReader { geo in
@@ -758,21 +835,45 @@ struct TopFiveStrip: View {
                 animateFlash(for: index)
             } label: {
                 ZStack {
+
+                    // Base content (centered)
                     VStack(spacing: 2) {
                         Text(entrant.name)
                             .font(.caption)
                             .lineLimit(1)
+                            .multilineTextAlignment(.center)
 
                         BouncyScoreText(value: entrant.score)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .frame(minWidth: width, minHeight: 44)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
+                    // Existing sweep overlay
                     leaderboardFlash
                         .opacity(flashIndex == index ? 1 : 0)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .allowsHitTesting(false)
+                }
+                // Corner ribbon rank (1–5)
+                .overlay(alignment: .topLeading) {
+                    CornerRibbon(text: "\(index + 1)", color: accent.opacity(0.92))
+                        .scaleEffect(slotPulse[index] ? 1.18 : 1.0)
+                        .animation(.spring(response: 0.20, dampingFraction: 0.55), value: slotPulse[index])
+                }
+                // Pulse the badge when the entrant occupying this slot changes.
+                .onAppear {
+                    if lastSlotEntrantIDs[index] == nil {
+                        lastSlotEntrantIDs[index] = entrant.id
+                    }
+                }
+                .onChange(of: entrant.id) { _, newID in
+                    let oldID = lastSlotEntrantIDs[index]
+                    if let oldID, oldID != newID {
+                        triggerSlotPulse(index)
+                    }
+                    lastSlotEntrantIDs[index] = newID
                 }
                 .background(accent.opacity(0.14))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -793,6 +894,15 @@ struct TopFiveStrip: View {
                 .frame(minWidth: width, minHeight: 44)
                 .opacity(0.55)
                 .accessibilityHidden(true)
+        }
+    }
+
+
+    private func triggerSlotPulse(_ index: Int) {
+        guard slotPulse.indices.contains(index) else { return }
+        slotPulse[index] = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+            slotPulse[index] = false
         }
     }
 
@@ -841,6 +951,7 @@ struct EntrantTile: View {
     let name: String
     let score: Int
     let accent: Color
+    let height: CGFloat
     let onTap: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -848,6 +959,21 @@ struct EntrantTile: View {
     @State private var flash = false
     @State private var sweep = false
     @State private var pulse = false
+
+    // Convenience init so older call-sites still work (height optional)
+    init(
+        name: String,
+        score: Int,
+        accent: Color,
+        height: CGFloat = 105,
+        onTap: @escaping () -> Void
+    ) {
+        self.name = name
+        self.score = score
+        self.accent = accent
+        self.height = height
+        self.onTap = onTap
+    }
 
     var body: some View {
         Button {
@@ -857,12 +983,15 @@ struct EntrantTile: View {
         } label: {
             ZStack(alignment: .topTrailing) {
 
+                // Base tile
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Color("TileBackground"))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
                             .strokeBorder(accent.opacity(0.28), lineWidth: 1)
                     )
+
+                    // Center watermark "+" (decorative)
                     .overlay(alignment: .center) {
                         Image(systemName: "plus")
                             .font(.system(size: 72, weight: .bold))
@@ -873,10 +1002,13 @@ struct EntrantTile: View {
                             .animation(.easeOut(duration: 0.18), value: pulse)
                             .accessibilityHidden(true)
                     }
+
+                    // Gradient sweep flash overlay
                     .overlay(
                         gradientFlash.mask(RoundedRectangle(cornerRadius: 16))
                     )
 
+                // Score badge
                 Text("\(score)")
                     .font(.subheadline)
                     .fontWeight(.semibold)
@@ -889,18 +1021,21 @@ struct EntrantTile: View {
                     .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 1))
                     .padding(8)
 
+                // Entrant name
                 VStack(spacing: 6) {
                     Spacer(minLength: 6)
+
                     Text(name)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 6)
                 }
+                // Reserve space beneath the score badge
                 .padding(.top, 28)
                 .padding(.bottom, 8)
             }
-            .frame(height: 105)
+            .frame(height: height)
         }
         .buttonStyle(TallyPressStyle())
         .accessibilityLabel("\(name), score \(score)")
@@ -933,9 +1068,11 @@ struct EntrantTile: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
             sweep = true
         }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             pulse = false
         }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             flash = false
         }
@@ -1246,7 +1383,7 @@ private struct ResultsPDFView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Twist & Tally — Results")
+            Text("Twist & Tally — Top Ten Results")
                 .font(.title)
                 .fontWeight(.bold)
 
