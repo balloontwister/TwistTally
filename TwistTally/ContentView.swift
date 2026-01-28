@@ -191,7 +191,6 @@ struct ContentView: View {
                     )
                     .frame(width: 520)
                     .frame(minHeight: 520, idealHeight: 620, maxHeight: 720)
-                    .ignoresSafeArea(.keyboard, edges: .bottom)
                     .presentationCompactAdaptation(.sheet)
                 }
             }
@@ -210,7 +209,7 @@ struct ContentView: View {
                 let contest = store.contests[contestIndex]
                 scoringView(contest: contest)
             } else {
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     ContentUnavailableView(
                         "No Contests Yet",
                         systemImage: "list.bullet.rectangle",
@@ -228,7 +227,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color("BrandAccent"))
-                    .padding(.top, -6)
+                    .padding(.top, -2)
                 }
                 .padding()
                 .onAppear {
@@ -237,18 +236,18 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .padding(.bottom, 110)
-                .alert("Create Contest", isPresented: $isShowingCreateContestDialog) {
-                    TextField("Contest name", text: $createContestName)
-                    Button("Create") {
-                        let trimmed = createContestName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        store.addContest(named: trimmed)
-                        store.showBanner("Contest created.")
-                    }
-                    Button("Cancel", role: .cancel) { }
-                } message: {
-                    Text("Give your contest a name. You can rename it later in Manage.")
+                .padding(.bottom, 180)
+                .sheet(isPresented: $isShowingCreateContestDialog) {
+                    CreateContestSheet(
+                        name: $createContestName,
+                        onCreate: {
+                            let trimmed = createContestName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            store.addContest(named: trimmed)
+                            store.showBanner("Contest created.")
+                        }
+                    )
+                    .presentationDetents([.medium])
                 }
             }
         }
@@ -367,9 +366,11 @@ struct ContentView: View {
         // Curated sample contests of varying sizes to demonstrate the app.
         // (Kept programmatic to avoid shipping a separate JSON file in v1.0.)
         store.deleteAllContests()
+        var smallContestID: UUID? = nil
 
         // Sample 1: small
         store.addContest(named: "Small Contest")
+        smallContestID = store.selectedContestID
         if let idx = store.currentContestIndex {
             store.contests[idx].entrants = [
                 Entrant(name: "Amanda"), Entrant(name: "Jenna"),
@@ -396,24 +397,65 @@ struct ContentView: View {
             store.contests[idx].entrants = (1...36).map { Entrant(name: "Entrant \($0)") }
         }
 
-        // Select the first contest for the user (Small Contest).
-        if let first = store.contests.first {
-            store.selectedContestID = first.id
+        // Select the Small contest explicitly (do not rely on array ordering).
+        if let smallID = smallContestID {
+            store.selectedContestID = smallID
             store.selectionChanged()
         }
 
         finishFirstRun()
+        store.showBanner("Loaded sample contests. You can delete them anytime in Manage.")
+    }
+}
 
-        // Defensive: some internal selection changes can occur during contest creation / sheet dismissal.
-        // Re-assert the first contest selection on the next run loop so “Small Contest” is what appears.
-        DispatchQueue.main.async {
-            if let first = store.contests.first {
-                store.selectedContestID = first.id
-                store.selectionChanged()
+// MARK: - Create Contest Sheet (used for empty-state)
+private struct CreateContestSheet: View {
+    @Binding var name: String
+    let onCreate: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Create your first contest")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                Text("Give your contest a name. You can rename it later in Manage.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                TextField("Contest name", text: $name)
+                    .textInputAutocapitalization(.words)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isFocused)
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationTitle("New Contest")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        onCreate()
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }
-
-        store.showBanner("Loaded sample contests. You can delete them anytime in Manage.")
+        .onAppear {
+            // Focus after the sheet is presented (avoids keyboard/layout warnings).
+            DispatchQueue.main.async {
+                isFocused = true
+            }
+        }
     }
 }
 
@@ -497,6 +539,12 @@ private struct ManagePopover: View {
     @State private var screen: Screen = .menu
     @State private var newContestName: String = ""
     @State private var renameName: String = ""
+    @State private var isShowingNewContestSheet = false
+    @State private var isShowingRenameContestSheet = false
+
+    // Keyboard focus helpers (so Rename/New screens scroll correctly in landscape)
+    @FocusState private var isRenameFieldFocused: Bool
+    @FocusState private var isNewContestFieldFocused: Bool
 
     
     // MARK: - About
@@ -564,17 +612,12 @@ private struct ManagePopover: View {
 
     var body: some View {
         NavigationStack {
-            content
+            menuView
                 .padding(.bottom, keyboard.height * 0.85)
                 .animation(.easeOut(duration: 0.18), value: keyboard.height)
                 .navigationTitle("Manage")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        if screen != .menu {
-                            Button("Back") { screen = .menu }
-                        }
-                    }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { onDone() }
                     }
@@ -584,9 +627,101 @@ private struct ManagePopover: View {
                 } message: {
                     Text(successMessage)
                 }
-                // About screen (simple help + purpose)
+                // About screen
                 .sheet(isPresented: $isShowingAbout) {
                     AboutView()
+                }
+                // New Contest as a sheet (avoids popover+keyboard issues in landscape)
+                .sheet(isPresented: $isShowingNewContestSheet) {
+                    NavigationStack {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Contest Name")
+                                .font(.headline)
+
+                            TextField("New contest name", text: $newContestName)
+                                .textInputAutocapitalization(.words)
+                                .textFieldStyle(.roundedBorder)
+                                .focused($isNewContestFieldFocused)
+
+                            Button {
+                                let trimmed = newContestName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !trimmed.isEmpty else { return }
+                                store.addContest(named: trimmed)
+                                newContestName = store.defaultNewContestName()
+                                isNewContestFieldFocused = false
+                                isShowingNewContestSheet = false
+                            } label: {
+                                Text("Create Contest")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(16)
+                        .navigationTitle("New Contest")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") {
+                                    isNewContestFieldFocused = false
+                                    isShowingNewContestSheet = false
+                                }
+                            }
+                        }
+                    }
+                    .presentationDetents([.medium])
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            isNewContestFieldFocused = true
+                        }
+                    }
+                }
+                // Rename Contest as a sheet (avoids popover+keyboard issues in landscape)
+                .sheet(isPresented: $isShowingRenameContestSheet) {
+                    NavigationStack {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Contest Name")
+                                .font(.headline)
+
+                            TextField("Contest name", text: $renameName)
+                                .textInputAutocapitalization(.words)
+                                .textFieldStyle(.roundedBorder)
+                                .focused($isRenameFieldFocused)
+
+                            Button {
+                                let trimmed = renameName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !trimmed.isEmpty else { return }
+                                let binding = store.bindingForCurrentContestName()
+                                binding.wrappedValue = trimmed
+                                isRenameFieldFocused = false
+                                isShowingRenameContestSheet = false
+                            } label: {
+                                Text("Save")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(16)
+                        .navigationTitle("Rename Contest")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") {
+                                    isRenameFieldFocused = false
+                                    isShowingRenameContestSheet = false
+                                }
+                            }
+                        }
+                    }
+                    .presentationDetents([.medium])
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            isRenameFieldFocused = true
+                        }
+                    }
                 }
         }
         // ✅ Export backup to Files
@@ -598,15 +733,12 @@ private struct ManagePopover: View {
         ) { result in
             switch result {
             case .success:
-                // NOTE: This fires after the user picks a location/name in Files.
                 store.showBanner("Backup exported.")
                 successMessage = "Backup exported successfully."
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 showSuccessAlert = true
 
             case .failure(let error):
-                // If the user cancels, SwiftUI often reports a failure (e.g., CocoaError.userCancelled).
-                // We keep this lightweight and only show a message.
                 store.showBanner("Export canceled or failed.")
                 successMessage = "Export canceled or failed: \(error.localizedDescription)"
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -621,7 +753,6 @@ private struct ManagePopover: View {
             do {
                 let url = try result.get()
 
-                // ✅ iPad Files access: request permission to read this file URL
                 let didAccess = url.startAccessingSecurityScopedResource()
                 defer {
                     if didAccess { url.stopAccessingSecurityScopedResource() }
@@ -632,19 +763,15 @@ private struct ManagePopover: View {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
 
-                // Preferred: full PersistedState snapshot (includes selectedContestID)
                 if let state = try? decoder.decode(PersistedState.self, from: data) {
                     store.replaceAllContests(contests: state.contests, selectedID: state.selectedContestID)
                     store.showBanner("Imported contests (replaced).")
-                    screen = .menu
                     return
                 }
 
-                // Fallback: just [Contest]
                 let contests = try decoder.decode([Contest].self, from: data)
                 store.replaceAllContests(contests: contests, selectedID: contests.first?.id)
                 store.showBanner("Imported contests (replaced).")
-                screen = .menu
 
             } catch {
                 store.showBanner("Import failed: \(error.localizedDescription)")
@@ -656,7 +783,6 @@ private struct ManagePopover: View {
             }
             newContestName = store.defaultNewContestName()
         }
-        
     }
 
     @ViewBuilder
@@ -685,7 +811,7 @@ private struct ManagePopover: View {
 
                 Button {
                     newContestName = store.defaultNewContestName()
-                    screen = .newContest
+                    isShowingNewContestSheet = true
                 } label: {
                     Label("New Contest", systemImage: "plus")
                 }
@@ -694,7 +820,7 @@ private struct ManagePopover: View {
                     if let idx = store.currentContestIndex {
                         renameName = store.contests[idx].name
                     }
-                    screen = .rename
+                    isShowingRenameContestSheet = true
                 } label: {
                     Label("Rename Contest", systemImage: "square.and.pencil")
                 }
@@ -858,55 +984,104 @@ private struct ManagePopover: View {
 
     // MARK: - New Contest
     private var newContestView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Contest Name")
-                    .font(.headline)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Contest Name")
+                        .font(.headline)
 
-                TextField("New contest name", text: $newContestName)
-                    .textInputAutocapitalization(.words)
-                    .textFieldStyle(.roundedBorder)
+                    TextField("New contest name", text: $newContestName)
+                        .textInputAutocapitalization(.words)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isNewContestFieldFocused)
+                        .id("newContestField")
 
-                Button {
-                    store.addContest(named: newContestName)
-                    newContestName = store.defaultNewContestName()
-                    screen = .menu
-                } label: {
-                    Text("Create Contest")
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        store.addContest(named: newContestName)
+                        newContestName = store.defaultNewContestName()
+                        isNewContestFieldFocused = false
+                        screen = .menu
+                    } label: {
+                        Text("Create Contest")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
-
-                Spacer(minLength: 0)
+                .padding(16)
+                .padding(.bottom, 12)
             }
-            .padding(16)
+            // Give the ScrollView enough bottom room to scroll content above the keyboard.
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: max(20, keyboard.height))
+            }
+            .onAppear {
+                // Focus + scroll after presentation (prevents the field from being pushed out of view in landscape).
+                DispatchQueue.main.async {
+                    isNewContestFieldFocused = true
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo("newContestField", anchor: .top)
+                    }
+                }
+            }
+            .onChange(of: isNewContestFieldFocused) { _, focused in
+                if focused {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo("newContestField", anchor: .top)
+                    }
+                }
+            }
         }
     }
 
     // MARK: - Rename Contest
     private var renameView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Contest Name")
-                    .font(.headline)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Contest Name")
+                        .font(.headline)
 
-                TextField("Contest name", text: $renameName)
-                    .textInputAutocapitalization(.words)
-                    .textFieldStyle(.roundedBorder)
+                    TextField("Contest name", text: $renameName)
+                        .textInputAutocapitalization(.words)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isRenameFieldFocused)
+                        .id("renameField")
 
-                Button {
-                    let binding = store.bindingForCurrentContestName()
-                    binding.wrappedValue = renameName
-                    screen = .menu
-                } label: {
-                    Text("Save")
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        let binding = store.bindingForCurrentContestName()
+                        binding.wrappedValue = renameName
+                        isRenameFieldFocused = false
+                        screen = .menu
+                    } label: {
+                        Text("Save")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
-
-                Spacer(minLength: 0)
+                .padding(16)
+                .padding(.bottom, 12)
             }
-            .padding(16)
+            // Give the ScrollView enough bottom room to scroll content above the keyboard.
+            // In landscape, the keyboard can be much taller than a fixed inset.
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: max(20, keyboard.height))
+            }
+            .onAppear {
+                // Focus + scroll after presentation (prevents the field from being pushed out of view in landscape).
+                DispatchQueue.main.async {
+                    isRenameFieldFocused = true
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo("renameField", anchor: .top)
+                    }
+                }
+            }
+            .onChange(of: isRenameFieldFocused) { _, focused in
+                if focused {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo("renameField", anchor: .top)
+                    }
+                }
+            }
         }
     }
 }
