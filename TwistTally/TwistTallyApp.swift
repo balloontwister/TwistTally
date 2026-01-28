@@ -13,7 +13,6 @@ struct TwistTallyApp: App {
         WindowGroup {
             ContentView()
                 .tint(Color("BrandAccent"))
-
         }
     }
 }

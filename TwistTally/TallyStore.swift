@@ -184,7 +184,7 @@ final class TallyStore: ObservableObject {
 
         let newContest = Contest(
             name: finalName,
-            entrants: (1...12).map { Entrant(name: "Entrant \($0)") },
+            entrants: (1...10).map { Entrant(name: "Entrant \($0)") },
             accentHex: nextAccentHex()
         )
         contests.insert(newContest, at: 0)

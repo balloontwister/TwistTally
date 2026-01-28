@@ -22,6 +22,14 @@ struct ContentView: View {
     // Results & Export sheet
     @State private var isShowingSummaryExport = false
 
+    // Empty-state: create first contest
+    @State private var isShowingCreateContestDialog = false
+    @State private var createContestName: String = ""
+
+    // First-run onboarding (one-time)
+    @AppStorage("hasLaunchedBefore") private var hasLaunchedBefore: Bool = false
+    @State private var isShowingGetStarted = false
+
     // MARK: - Grid Layout
     private let columns: [GridItem] = [
         GridItem(.adaptive(minimum: 120), spacing: 12)
@@ -59,6 +67,28 @@ struct ContentView: View {
                 // Results & Export sheet
                 .sheet(isPresented: $isShowingSummaryExport) {
                     ResultsExportView(store: store)
+                }
+
+                // First-run: Get Started
+                .sheet(isPresented: $isShowingGetStarted) {
+                    GetStartedSheet(
+                        onQuickStart: {
+                            applyQuickStart()
+                        },
+                        onLoadSamples: {
+                            applySampleContests()
+                        },
+                        onStartBlank: {
+                            applyStartBlank()
+                        }
+                    )
+                    .interactiveDismissDisabled(true)
+                }
+                .onAppear {
+                    // Show only on first launch.
+                    if !hasLaunchedBefore {
+                        isShowingGetStarted = true
+                    }
                 }
         }
     }
@@ -180,12 +210,46 @@ struct ContentView: View {
                 let contest = store.contests[contestIndex]
                 scoringView(contest: contest)
             } else {
-                ContentUnavailableView(
-                    "No Contests",
-                    systemImage: "list.bullet.rectangle",
-                    description: Text("Add a contest to start scoring.")
-                )
+                VStack(spacing: 8) {
+                    ContentUnavailableView(
+                        "No Contests Yet",
+                        systemImage: "list.bullet.rectangle",
+                        description: Text("Create your first contest to start scoring.")
+                    )
+
+                    Button {
+                        if createContestName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            createContestName = store.defaultNewContestName()
+                        }
+                        isShowingCreateContestDialog = true
+                    } label: {
+                        Label("Create Contest", systemImage: "plus")
+                            .frame(minWidth: 220)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color("BrandAccent"))
+                    .padding(.top, -6)
+                }
                 .padding()
+                .onAppear {
+                    if createContestName.isEmpty {
+                        createContestName = store.defaultNewContestName()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .padding(.bottom, 110)
+                .alert("Create Contest", isPresented: $isShowingCreateContestDialog) {
+                    TextField("Contest name", text: $createContestName)
+                    Button("Create") {
+                        let trimmed = createContestName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        store.addContest(named: trimmed)
+                        store.showBanner("Contest created.")
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("Give your contest a name. You can rename it later in Manage.")
+                }
             }
         }
     }
@@ -260,6 +324,159 @@ struct ContentView: View {
             .presentationDetents([.large])
         }
     }
+
+    // MARK: - First-run actions
+
+    private func finishFirstRun() {
+        hasLaunchedBefore = true
+        isShowingGetStarted = false
+        store.showBanner("Ready to tally!")
+    }
+
+    private func applyStartBlank() {
+        // Start with zero contests. The empty-state UI will prompt to create one.
+        store.deleteAllContests()
+        finishFirstRun()
+    }
+
+    private func applyQuickStart() {
+        // One contest, a handful of entrants, ready to tap.
+        store.deleteAllContests()
+        store.addContest(named: "🏅 Contest")
+
+        // Seed entrants
+        let names = [
+            "Entrant 1", "Entrant 2", "Entrant 3", "Entrant 4",
+            "Entrant 5", "Entrant 6", "Entrant 7", "Entrant 8"
+        ]
+
+        if let idx = store.currentContestIndex {
+            // Clear any entrants created by defaults and replace.
+            store.contests[idx].entrants = names.map { Entrant(name: $0) }
+        }
+
+        if let first = store.contests.first {
+            store.selectedContestID = first.id
+            store.selectionChanged()
+        }
+
+        finishFirstRun()
+    }
+
+    private func applySampleContests() {
+        // Curated sample contests of varying sizes to demonstrate the app.
+        // (Kept programmatic to avoid shipping a separate JSON file in v1.0.)
+        store.deleteAllContests()
+
+        // Sample 1: small
+        store.addContest(named: "Small Contest")
+        if let idx = store.currentContestIndex {
+            store.contests[idx].entrants = [
+                Entrant(name: "Amanda"), Entrant(name: "Jenna"),
+                Entrant(name: "Barbara"), Entrant(name: "Catherine"),
+                Entrant(name: "Elizabeth"), Entrant(name: "Diana")
+            ]
+        }
+
+        // Sample 2: medium
+        store.addContest(named: "Medium Contest")
+        if let idx = store.currentContestIndex {
+            store.contests[idx].entrants = (1...15).map { Entrant(name: "Entrant \($0)") }
+        }
+
+        // Sample 3: large
+        store.addContest(named: "Large Contest")
+        if let idx = store.currentContestIndex {
+            store.contests[idx].entrants = (1...28).map { Entrant(name: "Entrant \($0)") }
+        }
+
+        // Sample 4: jam-style (many entrants)
+        store.addContest(named: "Jumbo Contest")
+        if let idx = store.currentContestIndex {
+            store.contests[idx].entrants = (1...36).map { Entrant(name: "Entrant \($0)") }
+        }
+
+        // Select the first contest for the user (Small Contest).
+        if let first = store.contests.first {
+            store.selectedContestID = first.id
+            store.selectionChanged()
+        }
+
+        finishFirstRun()
+
+        // Defensive: some internal selection changes can occur during contest creation / sheet dismissal.
+        // Re-assert the first contest selection on the next run loop so “Small Contest” is what appears.
+        DispatchQueue.main.async {
+            if let first = store.contests.first {
+                store.selectedContestID = first.id
+                store.selectionChanged()
+            }
+        }
+
+        store.showBanner("Loaded sample contests. You can delete them anytime in Manage.")
+    }
+}
+
+// MARK: - First-run Get Started sheet
+private struct GetStartedSheet: View {
+    let onQuickStart: () -> Void
+    let onLoadSamples: () -> Void
+    let onStartBlank: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+
+                Text("Get Started")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+
+                Text("Choose how you want to begin.")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                VStack(spacing: 12) {
+                    Button {
+                        onQuickStart()
+                    } label: {
+                        Label("Quick Start", systemImage: "bolt.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        onLoadSamples()
+                    } label: {
+                        Label("Load Sample Contests", systemImage: "sparkles")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        onStartBlank()
+                    } label: {
+                        Label("Start Blank", systemImage: "square")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("• Quick Start creates one contest with a few entrants so you can start tapping immediately.")
+                    Text("• Sample Contests loads example contests of different sizes to demonstrate the grid and leaderboard.")
+                    Text("• Start Blank begins with no contests — you’ll be prompted to create your first contest.")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
 }
 
 // MARK: - Manage Popover
@@ -281,6 +498,7 @@ private struct ManagePopover: View {
     @State private var newContestName: String = ""
     @State private var renameName: String = ""
 
+    
     // MARK: - About
     @State private var isShowingAbout = false
 
@@ -438,6 +656,7 @@ private struct ManagePopover: View {
             }
             newContestName = store.defaultNewContestName()
         }
+        
     }
 
     @ViewBuilder
@@ -455,7 +674,6 @@ private struct ManagePopover: View {
     // MARK: - Menu
     private var menuView: some View {
         Form {
-
             // Contest selection + create/rename
             Section("Contest") {
                 Picker("Current Contest", selection: $store.selectedContestID) {
@@ -746,22 +964,50 @@ struct TopFiveStrip: View {
         var body: some View {
             ZStack {
                 RibbonShape()
-                    .fill(color)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                color.opacity(0.95),
+                                color.opacity(0.70)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
 
+                // Subtle highlight stroke (reads like fabric / edge lighting)
                 RibbonShape()
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.22), lineWidth: 0.6)
 
                 Text(text)
                     .font(.caption2)
-                    .fontWeight(.bold)
+                    .fontWeight(.semibold)
                     .monospacedDigit()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.white.opacity(0.92))
+                    // Ensure the digit sits visually centered in the rotated ribbon.
+                    .baselineOffset(-1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .minimumScaleFactor(0.8)
             }
-            .frame(width: 56, height: 18)
+            // Slightly smaller so the ribbon is narrower.
+            .frame(width: 38, height: 18)
             .rotationEffect(.degrees(-45))
-            .offset(x: -18, y: -14)
-            .shadow(radius: 1.5, y: 1)
+            // Keep the ribbon positioned naturally; the parent overlay will inset it.
+            .offset(x: 0, y: 0)
+            .shadow(color: .black.opacity(0.18), radius: 1.2, y: 1)
             .accessibilityHidden(true)
+        }
+    }
+
+    // Muted “award” palette that stands apart from the score badges without dominating.
+    private func ribbonColor(for index: Int) -> Color {
+        switch index {
+        case 0: return Color(.systemYellow).opacity(0.70)   // gold-ish
+        case 1: return Color(.systemGray2).opacity(0.80)    // silver-ish
+        case 2: return Color(.systemOrange).opacity(0.62)   // bronze-ish
+        default:
+            // Calm neutral for 4–5 (still distinct from the score badge).
+            return Color(.systemGray3).opacity(0.82)
         }
     }
     
@@ -856,12 +1102,6 @@ struct TopFiveStrip: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .allowsHitTesting(false)
                 }
-                // Corner ribbon rank (1–5)
-                .overlay(alignment: .topLeading) {
-                    CornerRibbon(text: "\(index + 1)", color: accent.opacity(0.92))
-                        .scaleEffect(slotPulse[index] ? 1.18 : 1.0)
-                        .animation(.spring(response: 0.20, dampingFraction: 0.55), value: slotPulse[index])
-                }
                 // Pulse the badge when the entrant occupying this slot changes.
                 .onAppear {
                     if lastSlotEntrantIDs[index] == nil {
@@ -881,6 +1121,20 @@ struct TopFiveStrip: View {
                     RoundedRectangle(cornerRadius: 10)
                         .strokeBorder(accent.opacity(0.22), lineWidth: 1)
                 )
+                // Corner ribbon rank (1–5) — inset and masked so it looks like it wraps the corner.
+                .overlay {
+                    ZStack(alignment: .topLeading) {
+                        CornerRibbon(text: "\(index + 1)", color: ribbonColor(for: index))
+                        .scaleEffect(slotPulse[index] ? 1.18 : 1.0)
+                            .animation(.spring(response: 0.20, dampingFraction: 0.55), value: slotPulse[index])
+                            // Slightly less inset so the ribbon clears the entrant name in compact layouts.
+                            .padding(.top, 2)
+                            .padding(.leading, -1)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // Mask to the slot shape so the ribbon never sticks out past the rounded corner.
+                    .mask(RoundedRectangle(cornerRadius: 10))
+                }
             }
             .buttonStyle(TallyPressStyle())
             .accessibilityLabel("Leaderboard: \(entrant.name), score \(entrant.score)")
@@ -1559,6 +1813,22 @@ private struct AboutView: View {
 
                         Text("Twist & Tally was created by Todd Neufeld, a professional balloon artist, educator, and event producer. The app grew out of real-world judging and balloon jam scenarios where fast, distraction-free scoring mattered more than complex tools.")
                             .font(.body)
+                    }
+
+                    Group {
+                        Text("Support")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+
+                        Text("If you need help, have a question, or want to suggest an improvement, support is available here:")
+                            .font(.body)
+
+                        Link("twist.ly/tally", destination: URL(string: "https://twist.ly/tally")!)
+                            .font(.headline)
+
+                        Text("Support is provided via a simple web page — no account required.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     Spacer(minLength: 24)
