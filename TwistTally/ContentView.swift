@@ -554,6 +554,7 @@ private struct ManagePopover: View {
     @State private var isExportingBackup = false
     @State private var backupData = Data()
     @State private var isImportingBackup = false
+    @State private var isShowingImportConfirm = false
 
     // MARK: - Destructive action confirmation
     private enum DestructiveAction: Identifiable {
@@ -900,7 +901,7 @@ private struct ManagePopover: View {
                 }
 
                 Button {
-                    isImportingBackup = true
+                    isShowingImportConfirm = true
                 } label: {
                     Label("Import Contests (.json)", systemImage: "square.and.arrow.down")
                 }
@@ -980,6 +981,14 @@ private struct ManagePopover: View {
         } message: {
             Text(pendingDestructive?.message ?? "")
         }
+        .alert("Import will replace current contests?", isPresented: $isShowingImportConfirm) {
+            Button("Import", role: .destructive) {
+                isImportingBackup = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Importing a backup replaces ALL contests and scores currently on this device. This cannot be undone.")
+        }
     }
 
     // MARK: - New Contest
@@ -1012,7 +1021,7 @@ private struct ManagePopover: View {
             }
             // Give the ScrollView enough bottom room to scroll content above the keyboard.
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: max(20, keyboard.height))
+                Color.clear.frame(height: max(CGFloat(20), keyboard.height))
             }
             .onAppear {
                 // Focus + scroll after presentation (prevents the field from being pushed out of view in landscape).
@@ -1064,7 +1073,7 @@ private struct ManagePopover: View {
             // Give the ScrollView enough bottom room to scroll content above the keyboard.
             // In landscape, the keyboard can be much taller than a fixed inset.
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: max(20, keyboard.height))
+                Color.clear.frame(height: max(CGFloat(20), keyboard.height))
             }
             .onAppear {
                 // Focus + scroll after presentation (prevents the field from being pushed out of view in landscape).
